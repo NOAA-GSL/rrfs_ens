@@ -1,12 +1,17 @@
+'''
+Python utility that leverages xarray to load an ensemble of NetCDF
+files, extract the perturbations, and apply them to a base state.
 
+Supports reading/writing a perturbation file instead of a full ensmeble
+of files.
 
+'''
 
 import argparse
-from distributed import Client
 import functools
 import os
-import shutil
 import time
+
 import xarray as xr
 
 def timer(func):
@@ -26,6 +31,9 @@ def timer(func):
 @timer
 def main(cla):
 
+    ''' Main function that takes a Namespace structure of command line
+    arguments (cla) and generates the requested ensemble output. '''
+
     for fhr in cla.fcst_hour:
 
         # Get perturbations
@@ -43,7 +51,7 @@ def main(cla):
         # Write ens perturbations to a single file
         if cla.write_perturbations:
             if cla.perturbation_file:
-                pass
+                ens_perts.to_netcdf(cla.perturbation_file)
 
         # Write ensmeble of full-state files
         if cla.ens_outfn_tmpl and cla.base_state:
@@ -54,7 +62,6 @@ def main(cla):
 
             # Call the appropriate variables function
             variables = globals().get(f"{cla.vars}_variables")()
-            print(variables)
 
             mem_fpaths = []
             mem_states = []
@@ -62,39 +69,25 @@ def main(cla):
             for mem in range(0, ens_perts.dims['ens']):
 
                 print(f'Preparing member {mem+1}')
-                # Create output directory. Done here since it could be
-                # per member.
+                # Create output directory. Done here to allow support
+                # for mem field in format string.
                 outputdir = cla.outputdir.format(mem=mem+1)
                 os.makedirs(outputdir, exist_ok=True)
 
-                # Identify member output file
+                # Identify member output file, and generate a list
                 mem_fname = cla.ens_outfn_tmpl.format(fhr=fhr, mem=mem+1)
                 mem_fpath = os.path.join(outputdir, mem_fname)
                 mem_fpaths.append(mem_fpath)
 
-                # Write update state to ensemble member file
-                #print(f'Writing file: {mem_fpath}')
-
-
-                ## Copy base state file to outputdir
-                tic = time.perf_counter()
-                shutil.copyfile(base_fpath, mem_fpath)
-                toc = time.perf_counter()
-                print(f'Copy time: {toc - tic}')
-                #base_state = xr.open_fdataset(mem_fpath)
-
+                # Compute perturbations and add them to a list
                 pert = ens_perts[variables].sel(ens=mem)
                 mem_states.append(base_state.update(base_state + pert))
 
-                #tic = time.perf_counter()
-                #ens_state.to_netcdf(mem_fpath, format='NETCDF4_CLASSIC',
-                #        mode='a')
-                #toc = time.perf_counter()
-                #print(f'Write time: {toc - tic}')
-
-
+        # Write all files to disk
         xr.save_mfdataset(mem_states, mem_fpaths,
-                format='NETCDF4_CLASSIC', mode='a')
+                          format='NETCDF4_CLASSIC',
+                          mode='w',
+                          )
 
 def atmo_variables():
 
@@ -131,9 +124,9 @@ def check_perturbation_file(cla):
 
     if cla.write_perturbations:
         if cla.perturbation_file:
-            if os.path.exist(cla.perturbation_file):
+            if os.path.exists(cla.perturbation_file):
                 msg = 'The perturbation file exists. Will not overwrite it!'
-                raise argparse.ArgumentError(msg)
+                raise argparse.ArgumentTypeError(msg)
 
 def fhr_list(args):
 
@@ -155,7 +148,15 @@ def fhr_list(args):
 
     return args
 
+def load_perturbations(inpath):
+
+    ''' Open a single NetCDF file of perturbations. '''
+
+    return xr.open_dataset(inpath)
+
 def parse_args():
+
+    ''' Parse arguments to script using argparse. '''
 
     parser = argparse.ArgumentParser(
         description='''Ensemble perturbation manager.
@@ -163,6 +164,7 @@ def parse_args():
         file to gather ensemble perturbations, then write the ensemble
         perturbations and/or the perturbations to disk.''')
 
+    # Short options
     parser.add_argument(
         '-b',
         dest='base_state',
@@ -181,7 +183,7 @@ def parse_args():
         help='A list describing forecast hours. If one argument, a ' +
         'single forecast hour will be processed. If 2 or 3 arguments,' +
         ' a sequence of forecast hours [start, stop, [increment]] ' +
-        'will be processed. If more than 3 arguments, the provided ' + 
+        'will be processed. If more than 3 arguments, the provided ' +
         'is processed as-is.',
         nargs='+',
         type=int,
@@ -215,11 +217,11 @@ def parse_args():
 
     # Long options
     parser.add_argument(
-            '--write_perturbations',
-            action='store_true',
-            help='If present, perturbations file described by ' +
-            '-p argument will be written.'
-            )
+        '--write_perturbations',
+        action='store_true',
+        help='If present, perturbations file described by ' +
+        '-p argument will be written.'
+        )
     return parser.parse_args()
 
 def sfc_variables():
