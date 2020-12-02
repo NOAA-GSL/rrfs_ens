@@ -75,8 +75,10 @@ def main(cla):
                 mem_fname = cla.ens_outfn_tmpl.format(fhr=fhr, mem=mem+1)
                 mem_fpath = os.path.join(outputdir, mem_fname)
 
-                # Compute perturbations and add them to a list
-                full_mem = ens_perts.sel(ens=mem) + base_state
+                # Write full ensemble members to disk. One at a time allows
+                # compression, and should give similar performance as
+                # save_mfdataset() without a dask cluster.
+                full_mem = ens_perts[variables].sel(ens=mem) + base_state
                 comp = {'zlib': True, 'complevel': 9}
                 encoding = {var: comp for var in full_mem.data_vars}
                 full_mem.to_netcdf(mem_fpath, encoding=encoding)
