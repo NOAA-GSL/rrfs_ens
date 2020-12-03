@@ -36,10 +36,13 @@ def main(cla):
 
     for fhr in cla.fcst_hour:
 
+        # Call the appropriate variables function
+        variables = globals().get(f"{cla.vars}_variables")()
+
         # Get perturbations
         if cla.inputpath:
             ens_path = cla.inputpath.format(fhr=fhr)
-            ens_perts = compute_perturbations(ens_path)
+            ens_perts = compute_perturbations(ens_path, variables)
 
         elif cla.perturbation_file:
             ens_perts = load_perturbations(cla.perturbation_file)
@@ -60,12 +63,6 @@ def main(cla):
             base_fpath = cla.base_state.format(fhr=fhr)
             base_state = xr.open_mfdataset(base_fpath)
 
-            # Call the appropriate variables function
-            variables = globals().get(f"{cla.vars}_variables")()
-
-            mem_fpaths = []
-            mem_states = []
-
             for mem in range(0, ens_perts.dims['ens']):
 
                 print(f'Preparing member {mem+1}')
@@ -77,17 +74,14 @@ def main(cla):
                 # Identify member output file, and generate a list
                 mem_fname = cla.ens_outfn_tmpl.format(fhr=fhr, mem=mem+1)
                 mem_fpath = os.path.join(outputdir, mem_fname)
-                mem_fpaths.append(mem_fpath)
 
-                # Compute perturbations and add them to a list
-                pert = ens_perts[variables].sel(ens=mem)
-                mem_states.append(base_state.update(base_state + pert))
-
-        # Write all files to disk
-        xr.save_mfdataset(mem_states, mem_fpaths,
-                          format='NETCDF4_CLASSIC',
-                          mode='w',
-                          )
+                # Write full ensemble members to disk. One at a time allows
+                # compression, and should give similar performance as
+                # save_mfdataset() without a dask cluster.
+                full_mem = ens_perts[variables].sel(ens=mem) + base_state
+                comp = {'zlib': True, 'complevel': 9}
+                encoding = {var: comp for var in full_mem.data_vars}
+                full_mem.to_netcdf(mem_fpath, encoding=encoding)
 
 def atmo_variables():
 
@@ -104,14 +98,17 @@ def bndy_variables():
     bndy = ['_bottom', '_top', '_right', '_left']
     return [var + suffix for var in pert_vars for suffix in bndy]
 
-def compute_perturbations(inpath):
+def compute_perturbations(inpath, data_vars):
 
     ''' Read in an ensemble dataset described by inpath, and return the
     ensemble perturbations about the mean. '''
 
     ens = xr.open_mfdataset(inpath,
                             combine='nested',
+                            compat='override',
                             concat_dim='ens',
+                            coords='minimal',
+                            data_vars=data_vars,
                             parallel=True,
                             )
     ens_mean = ens.mean(dim='ens')
