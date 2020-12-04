@@ -61,10 +61,10 @@ def main(cla):
 
             # Open base state file
             base_fpath = cla.base_state.format(fhr=fhr)
-            base_state = xr.open_mfdataset(base_fpath)
 
             for mem in range(0, ens_perts.dims['ens']):
 
+                base_state = xr.open_mfdataset(base_fpath)
                 print(f'Preparing member {mem+1}')
                 # Create output directory. Done here to allow support
                 # for mem field in format string.
@@ -78,10 +78,12 @@ def main(cla):
                 # Write full ensemble members to disk. One at a time allows
                 # compression, and should give similar performance as
                 # save_mfdataset() without a dask cluster.
-                full_mem = ens_perts[variables].sel(ens=mem) + base_state
+                base_state.update(base_state +
+                        ens_perts[variables].sel(ens=mem))
                 comp = {'zlib': True, 'complevel': 9}
-                encoding = {var: comp for var in full_mem.data_vars}
-                full_mem.to_netcdf(mem_fpath, encoding=encoding)
+                encoding = {var: comp for var in base_state.data_vars}
+                base_state.to_netcdf(mem_fpath, encoding=encoding)
+                base_state.close()
 
 def atmo_variables():
 
